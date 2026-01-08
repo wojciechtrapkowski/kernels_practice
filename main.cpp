@@ -3,12 +3,14 @@
 
 #include "CL/cl.hpp"
 
+#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
+
 
 #define TOL (0.001) // tolerance used in floating point comparisons
 
@@ -49,13 +51,13 @@ cl::Device GetDevice() {
       plat->getDevices(CL_DEVICE_TYPE_ALL, &devices);
       std::cout << "\n\tNumber of devices: " << devices.size() << std::endl;
 
+      if (!device) {
+        device = devices.front();
+      }
+
       // Investigate each device
       for (std::vector<cl::Device>::iterator dev = devices.begin();
            dev != devices.end(); dev++) {
-        if (!device) {
-          device = *dev;
-        }
-
         std::cout << "\t-------------------------" << std::endl;
 
         dev->getInfo(CL_DEVICE_NAME, &s);
@@ -129,35 +131,49 @@ void RunVADDKernel(cl::Context &context, cl::CommandQueue &queue,
   auto program = CreateProgram(context, queue, device, VADD_KERNEL_PATH);
 
   auto vadd =
-      cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, int>(program, "vadd");
+      cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, int>(program, "vadd");
 
   std::vector<float> h_a(LENGTH);
   std::vector<float> h_b(LENGTH);
-  std::vector<float> h_c(LENGTH, 0xdeadbeef);
+  std::vector<float> h_c(LENGTH);
+  std::vector<float> h_d(LENGTH, 0xdeadbeef);
 
   // File the h_a & h_b randomly
   for (int i = 0; i < LENGTH; i++) {
     h_a[i] = rand() / (float)RAND_MAX;
     h_b[i] = rand() / (float)RAND_MAX;
+    h_c[i] = rand() / (float)RAND_MAX;
   }
 
   cl::Buffer d_a = cl::Buffer(context, h_a.begin(), h_a.end(), true);
 
   cl::Buffer d_b = cl::Buffer(context, h_b.begin(), h_b.end(), true);
 
-  cl::Buffer d_c =
+  cl::Buffer d_c = cl::Buffer(context, h_c.begin(), h_c.end(), true);
+
+  cl::Buffer d_d =
       cl::Buffer(context, CL_MEM_WRITE_ONLY, sizeof(float) * LENGTH);
 
-  vadd(cl::EnqueueArgs(queue, cl::NDRange(LENGTH)), d_a, d_b, d_c, LENGTH);
+  auto start = std::chrono::high_resolution_clock::now();
+
+  vadd(cl::EnqueueArgs(queue, cl::NDRange(512, 1, 1), cl::NDRange(64, 1, 1)),
+       d_a, d_b, d_c, d_d, LENGTH);
 
   queue.finish();
+  auto end = std::chrono::high_resolution_clock::now();
 
-  cl::copy(queue, d_c, h_c.begin(), h_c.end());
+  auto duration =
+      std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+
+  std::cout << "Kernel execution time: " << duration.count() << " ms"
+            << std::endl;
+
+  cl::copy(queue, d_d, h_d.begin(), h_d.end());
 
   // Test results
   unsigned int correct = 0;
   for (int i = 0; i < LENGTH; i++) {
-    float tmp = h_a[i] + h_b[i] - h_c[i];
+    float tmp = h_a[i] + h_b[i] + h_c[i] - h_d[i];
     if (tmp * tmp < TOL * TOL)
       correct++;
   }
