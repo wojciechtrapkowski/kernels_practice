@@ -2,19 +2,29 @@
 
 #include "tutorial/cl.hpp"
 
-#include <optional>
+#include <fstream>
 #include <iostream>
+#include <optional>
+#include <sstream>
+#include <string>
 #include <vector>
 
 #define TOL (0.001)   // tolerance used in floating point comparisons
 #define LENGTH (1024) // length of vectors a, b, and c
 
-int main() {
-  std::vector<cl::Platform> platforms;
+#ifndef VADD_KERNEL_PATH
+#error "VADD_KERNEL_PATH not defined"
+#endif
+
+namespace {
+
+cl::Device GetDevice() {
 
   std::optional<cl::Device> device;
 
   try {
+    std::vector<cl::Platform> platforms;
+
     // Discover number of platforms
     cl::Platform::get(&platforms);
     std::cout << "\nNumber of OpenCL plaforms: " << platforms.size()
@@ -92,35 +102,29 @@ int main() {
     exit(-1);
   }
 
-  const char *KernelSource =
-      "\n"
-      "__kernel void vadd(                                                 \n"
-      "   __global float* a,                                                  "
-      "\n"
-      "   __global float* b,                                                  "
-      "\n"
-      "   __global float* c,                                                  "
-      "\n"
-      "   const unsigned int count)                                           "
-      "\n"
-      "{                                                                      "
-      "\n"
-      "   int i = get_global_id(0);                                           "
-      "\n"
-      "   if(i < count)                                                       "
-      "\n"
-      "       c[i] = a[i] + b[i];                                             "
-      "\n"
-      "}                                                                      "
-      "\n"
-      "\n";
+  if (!device) {
+    throw std::runtime_error("No OpenCL device found.");
+  }
 
-  cl::Context context = cl::Context(device.value());
-  cl::CommandQueue commands = cl::CommandQueue(context, device.value());
+  return device.value();
+}
 
-  // Create program
-  cl::Program program = cl::Program(context, KernelSource);
-  program.build({device.value()});
+cl::Program CreateProgram(cl::Context &context, cl::CommandQueue &commands,
+                          cl::Device &device, const char *path) {
+  std::ifstream kernelFile(path);
+  std::stringstream kernelStream;
+  kernelStream << kernelFile.rdbuf();
+  std::string kernelSource = kernelStream.str();
+
+  cl::Program program = cl::Program(context, kernelSource.c_str());
+  program.build({device});
+
+  return program;
+}
+
+void RunVADDKernel(cl::Context &context, cl::CommandQueue &commands,
+                   cl::Device &device) {
+  auto program = CreateProgram(context, commands, device, VADD_KERNEL_PATH);
 
   cl::Kernel ko_vadd = cl::Kernel(program, "vadd");
 
@@ -145,8 +149,10 @@ int main() {
 
   std::vector<float> h_c(LENGTH);
 
-  commands.enqueueWriteBuffer(d_a, CL_TRUE, 0, sizeof(float) * LENGTH, h_a.data());
-  commands.enqueueWriteBuffer(d_b, CL_TRUE, 0, sizeof(float) * LENGTH, h_b.data());
+  commands.enqueueWriteBuffer(d_a, CL_TRUE, 0, sizeof(float) * LENGTH,
+                              h_a.data());
+  commands.enqueueWriteBuffer(d_b, CL_TRUE, 0, sizeof(float) * LENGTH,
+                              h_b.data());
 
   ko_vadd.setArg(0, d_a);
   ko_vadd.setArg(1, d_b);
@@ -159,7 +165,8 @@ int main() {
   commands.finish();
 
   // Read results back
-  commands.enqueueReadBuffer(d_c, CL_TRUE, 0, sizeof(float) * LENGTH, h_c.data());
+  commands.enqueueReadBuffer(d_c, CL_TRUE, 0, sizeof(float) * LENGTH,
+                             h_c.data());
 
   // Test results
   unsigned int correct = 0;
@@ -170,6 +177,15 @@ int main() {
   }
 
   printf("C = A+B:  %d out of %d results were correct.\n", correct, LENGTH);
+}
+} // namespace
+
+int main() {
+  cl::Device device = GetDevice();
+  cl::Context context = cl::Context(device);
+  cl::CommandQueue commands = cl::CommandQueue(context, device);
+
+  RunVADDKernel(context, commands, device);
 
   return 0;
 }
