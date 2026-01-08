@@ -1,6 +1,7 @@
 #define __CL_ENABLE_EXCEPTIONS
+#define _SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING
 
-#include "tutorial/cl.hpp"
+#include "CL/cl.hpp"
 
 #include <fstream>
 #include <iostream>
@@ -9,8 +10,7 @@
 #include <string>
 #include <vector>
 
-#define TOL (0.001)   // tolerance used in floating point comparisons
-#define LENGTH (1024) // length of vectors a, b, and c
+#define TOL (0.001) // tolerance used in floating point comparisons
 
 #ifndef VADD_KERNEL_PATH
 #error "VADD_KERNEL_PATH not defined"
@@ -109,7 +109,7 @@ cl::Device GetDevice() {
   return device.value();
 }
 
-cl::Program CreateProgram(cl::Context &context, cl::CommandQueue &commands,
+cl::Program CreateProgram(cl::Context &context, cl::CommandQueue &queue,
                           cl::Device &device, const char *path) {
   std::ifstream kernelFile(path);
   std::stringstream kernelStream;
@@ -122,24 +122,18 @@ cl::Program CreateProgram(cl::Context &context, cl::CommandQueue &commands,
   return program;
 }
 
-void RunVADDKernel(cl::Context &context, cl::CommandQueue &commands,
+void RunVADDKernel(cl::Context &context, cl::CommandQueue &queue,
                    cl::Device &device) {
-  auto program = CreateProgram(context, commands, device, VADD_KERNEL_PATH);
+  constexpr auto LENGTH = 1024;
 
-  cl::Kernel ko_vadd = cl::Kernel(program, "vadd");
+  auto program = CreateProgram(context, queue, device, VADD_KERNEL_PATH);
 
-  // Create the input (a, b) and output (c) arrays in device memory
-  cl::Buffer d_a =
-      cl::Buffer(context, CL_MEM_READ_ONLY, sizeof(float) * LENGTH);
-
-  cl::Buffer d_b =
-      cl::Buffer(context, CL_MEM_READ_ONLY, sizeof(float) * LENGTH);
-
-  cl::Buffer d_c =
-      cl::Buffer(context, CL_MEM_WRITE_ONLY, sizeof(float) * LENGTH);
+  auto vadd =
+      cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, int>(program, "vadd");
 
   std::vector<float> h_a(LENGTH);
   std::vector<float> h_b(LENGTH);
+  std::vector<float> h_c(LENGTH, 0xdeadbeef);
 
   // File the h_a & h_b randomly
   for (int i = 0; i < LENGTH; i++) {
@@ -147,26 +141,18 @@ void RunVADDKernel(cl::Context &context, cl::CommandQueue &commands,
     h_b[i] = rand() / (float)RAND_MAX;
   }
 
-  std::vector<float> h_c(LENGTH);
+  cl::Buffer d_a = cl::Buffer(context, h_a.begin(), h_a.end(), true);
 
-  commands.enqueueWriteBuffer(d_a, CL_TRUE, 0, sizeof(float) * LENGTH,
-                              h_a.data());
-  commands.enqueueWriteBuffer(d_b, CL_TRUE, 0, sizeof(float) * LENGTH,
-                              h_b.data());
+  cl::Buffer d_b = cl::Buffer(context, h_b.begin(), h_b.end(), true);
 
-  ko_vadd.setArg(0, d_a);
-  ko_vadd.setArg(1, d_b);
-  ko_vadd.setArg(2, d_c);
-  ko_vadd.setArg(3, LENGTH);
+  cl::Buffer d_c =
+      cl::Buffer(context, CL_MEM_WRITE_ONLY, sizeof(float) * LENGTH);
 
-  // Execute kernel
-  cl::NDRange global(LENGTH);
-  commands.enqueueNDRangeKernel(ko_vadd, cl::NullRange, global);
-  commands.finish();
+  vadd(cl::EnqueueArgs(queue, cl::NDRange(LENGTH)), d_a, d_b, d_c, LENGTH);
 
-  // Read results back
-  commands.enqueueReadBuffer(d_c, CL_TRUE, 0, sizeof(float) * LENGTH,
-                             h_c.data());
+  queue.finish();
+
+  cl::copy(queue, d_c, h_c.begin(), h_c.end());
 
   // Test results
   unsigned int correct = 0;
@@ -183,9 +169,9 @@ void RunVADDKernel(cl::Context &context, cl::CommandQueue &commands,
 int main() {
   cl::Device device = GetDevice();
   cl::Context context = cl::Context(device);
-  cl::CommandQueue commands = cl::CommandQueue(context, device);
+  cl::CommandQueue queue = cl::CommandQueue(context, device);
 
-  RunVADDKernel(context, commands, device);
+  RunVADDKernel(context, queue, device);
 
   return 0;
 }

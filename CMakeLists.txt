@@ -10,15 +10,15 @@ set(OPENCL_SDK_BUILD_SAMPLES OFF CACHE BOOL "")
 set(OPENCL_SDK_BUILD_TESTS OFF CACHE BOOL "")
 
 add_subdirectory(dependencies/OpenCL-SDK)
-add_subdirectory(dependencies/Common_Tutorial)
+add_subdirectory(dependencies/OpenCL-CPP)
 
 add_subdirectory(kernels)
 
 add_executable(${PROJECT_NAME} main.cpp)
 
-add_dependencies(${PROJECT_NAME} Kernels Common_Tutorial)
+add_dependencies(${PROJECT_NAME} Kernels OpenCL-CPP)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Kernels
-    Common_Tutorial
+    OpenCL-CPP
 )

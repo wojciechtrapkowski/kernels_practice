@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.27)
 
-set(PROJECT_NAME Common_Tutorial)
+set(PROJECT_NAME OpenCL-CPP)
 
 project(${PROJECT_NAME} LANGUAGES C CXX)
 
