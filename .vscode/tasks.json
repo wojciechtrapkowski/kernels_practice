@@ -1,0 +1,25 @@
+{
+    "tasks": [
+        {
+            "type": "cppbuild",
+            "label": "CMake: Build Debug",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "${workspaceFolder}\\build",
+                "--config",
+                "Debug"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$msCompile"
+            ],
+            "group": {
+                "kind": "build"
+            }
+        },
+    ],
+    "version": "2.0.0"
+}
