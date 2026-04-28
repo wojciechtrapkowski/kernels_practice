@@ -2,7 +2,11 @@ project(Kernels)
 
 add_library(Kernels INTERFACE)
 
-file(GLOB KERNEL_FILES "${CMAKE_CURRENT_SOURCE_DIR}/*.cl")
+target_include_directories(Kernels INTERFACE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+file(GLOB KERNEL_FILES "${CMAKE_CURRENT_SOURCE_DIR}/device/*.cl")
 
 add_custom_target(copy_kernels ALL)
 
@@ -21,6 +25,9 @@ foreach(KERNEL_FILE ${KERNEL_FILES})
     message(STATUS "Copying kernel: ${KERNEL_NAME}.cl")
     
     target_compile_definitions(Kernels INTERFACE 
-        "${KERNEL_NAME_UPPER}_KERNEL_PATH=\"kernels/${KERNEL_NAME}.cl\""
+        "${KERNEL_NAME_UPPER}_KERNEL_PATH=\"${CMAKE_BINARY_DIR}/$<CONFIG>/kernels/${KERNEL_NAME}.cl\""
     )
 endforeach()
+
+
+add_dependencies(${PROJECT_NAME} copy_kernels)

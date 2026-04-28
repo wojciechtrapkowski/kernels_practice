@@ -1,5 +1,5 @@
-__kernel void vadd(__global float *a, __global float *b, __global float *c, __global float* d,
-                   const unsigned int count) {
+__kernel void vadd(__global float *a, __global float *b, __global float *c,
+                   __global float *d, const unsigned int count) {
   int i = get_global_id(0);
   int j = get_local_id(0);
   int wg = get_group_id(0);

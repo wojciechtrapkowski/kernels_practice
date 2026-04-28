@@ -10,13 +10,23 @@
 #include <sstream>
 #include <string>
 #include <vector>
-
+#include <numeric>
 
 #define TOL (0.001) // tolerance used in floating point comparisons
 
 #ifndef VADD_KERNEL_PATH
 #error "VADD_KERNEL_PATH not defined"
 #endif
+
+#ifndef MATMUL_KERNEL_PATH
+#error "MATMUL_KERNEL_PATH not defined"
+#endif
+
+#ifndef REDUCE_KERNEL_PATH
+#error "REDUCE_KERNEL_PATH not defined"
+#endif
+
+#include "host/matmul.hpp"
 
 namespace {
 
@@ -114,6 +124,9 @@ cl::Device GetDevice() {
 cl::Program CreateProgram(cl::Context &context, cl::CommandQueue &queue,
                           cl::Device &device, const char *path) {
   std::ifstream kernelFile(path);
+  if (!kernelFile.is_open()) {
+    throw std::runtime_error("Cannot open kernel file: " + std::string(path));
+  }
   std::stringstream kernelStream;
   kernelStream << kernelFile.rdbuf();
   std::string kernelSource = kernelStream.str();
@@ -131,7 +144,8 @@ void RunVADDKernel(cl::Context &context, cl::CommandQueue &queue,
   auto program = CreateProgram(context, queue, device, VADD_KERNEL_PATH);
 
   auto vadd =
-      cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, int>(program, "vadd");
+      cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, int>(
+          program, "vadd");
 
   std::vector<float> h_a(LENGTH);
   std::vector<float> h_b(LENGTH);
@@ -182,12 +196,104 @@ void RunVADDKernel(cl::Context &context, cl::CommandQueue &queue,
 }
 } // namespace
 
+void RunMatmulKernel(cl::Context &context, cl::CommandQueue &queue,
+                     cl::Device &device) {
+  std::cout << MATMUL_KERNEL_PATH << std::endl;
+  auto program = CreateProgram(context, queue, device, MATMUL_KERNEL_PATH);
+
+  auto matmul =
+      cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, int, int, int, int>(
+          program, "matmul");
+
+  std::vector<float> h_a{1.0f, 2.0f, 3.0f, 4.0f};
+  std::vector<float> h_b{5.0f, 6.0f, 7.0f, 8.0f};
+  std::vector<float> h_c(4);
+
+  std::vector<float> result(4);
+  HostKernels::matmul(h_a.data(), h_b.data(), result.data(), 2, 2, 2, 2);
+
+  cl::Buffer d_a = cl::Buffer(context, h_a.begin(), h_a.end(), true);
+
+  cl::Buffer d_b = cl::Buffer(context, h_b.begin(), h_b.end(), true);
+
+  cl::Buffer d_c = cl::Buffer(context, CL_MEM_WRITE_ONLY, sizeof(float) * 4);
+
+  auto start = std::chrono::high_resolution_clock::now();
+
+  matmul(cl::EnqueueArgs(queue, cl::NDRange(4, 1, 1), cl::NDRange(2, 1, 1)), d_a, d_b, d_c, 2, 2, 2,
+         2);
+
+  queue.finish();
+  auto end = std::chrono::high_resolution_clock::now();
+
+  auto duration =
+      std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+
+  std::cout << "Kernel execution time: " << duration.count() << " ms"
+            << std::endl;
+
+  cl::copy(queue, d_c, h_c.begin(), h_c.end());
+
+  // Test results
+  unsigned int correct = 0;
+  for (int i = 0; i < 2; i++) {
+    for (int j = 0; j < 2; j++) {
+      if (result[i * 2 + j] == h_c[i * 2 + j]) {
+        correct++;
+      }
+    }
+  }
+
+  printf("Matmul:  %d out of %d results were correct.\n", correct, 4);
+}
+
+void RunReduceKernel(cl::Context &context, cl::CommandQueue &queue,
+                     cl::Device &device) {
+  std::cout << REDUCE_KERNEL_PATH << std::endl;
+  auto program = CreateProgram(context, queue, device, REDUCE_KERNEL_PATH);
+
+  auto reduce =
+      cl::make_kernel<cl::Buffer, cl::Buffer, int>(
+          program, "reduce");
+
+  std::vector<int> h_a{1, 2, 3, 4, 5, 6, 7, 8};
+  int h_b = 0;
+
+  cl::Buffer d_a = cl::Buffer(context, h_a.begin(), h_a.end(), true);
+  
+  cl::Buffer d_b = cl::Buffer(context, CL_MEM_WRITE_ONLY, sizeof(int));
+
+  auto start = std::chrono::high_resolution_clock::now();
+
+  reduce(cl::EnqueueArgs(queue, cl::NDRange(256), cl::NDRange(256)), d_a, d_b, (int)h_a.size());
+
+  queue.finish();
+  auto end = std::chrono::high_resolution_clock::now();
+
+  auto duration =
+      std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+
+  std::cout << "Kernel execution time: " << duration.count() << " ms"
+            << std::endl;
+
+  cl::copy(queue, d_b, &h_b, &h_b + 1);
+
+  auto expected = std::accumulate(h_a.begin(), h_a.end(), 0); 
+  if (expected != h_b) {
+    std::cout << "Reduce: Incorrect result. Expected " << expected
+              << " but got " << h_b << std::endl;
+  } else {
+    std::cout << "Reduce: Correct result." << std::endl;
+  }
+}
+
 int main() {
   cl::Device device = GetDevice();
   cl::Context context = cl::Context(device);
   cl::CommandQueue queue = cl::CommandQueue(context, device);
 
-  RunVADDKernel(context, queue, device);
-
+  // RunVADDKernel(context, queue, device);
+  // RunMatmulKernel(context, queue, device);
+  RunReduceKernel(context, queue, device);
   return 0;
 }
