@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 #include <numeric>
+#include <random>
 
 #define TOL (0.001) // tolerance used in floating point comparisons
 
@@ -26,274 +27,327 @@
 #error "REDUCE_KERNEL_PATH not defined"
 #endif
 
+#ifndef PARALLEL_MERGE_KERNEL_PATH
+#error "PARALLEL_MERGE_KERNEL_PATH not defined"
+#endif
+
 #include "host/matmul.hpp"
 
-namespace {
+namespace
+{
 
-cl::Device GetDevice() {
+    cl::Device GetDevice()
+    {
+        std::optional<cl::Device> device;
 
-  std::optional<cl::Device> device;
+        try {
+            std::vector<cl::Platform> platforms;
 
-  try {
-    std::vector<cl::Platform> platforms;
+            // Discover number of platforms
+            cl::Platform::get(&platforms);
+            std::cout << "\nNumber of OpenCL plaforms: " << platforms.size() << std::endl;
 
-    // Discover number of platforms
-    cl::Platform::get(&platforms);
-    std::cout << "\nNumber of OpenCL plaforms: " << platforms.size()
-              << std::endl;
+            // Investigate each platform
+            std::cout << "\n-------------------------" << std::endl;
+            for (std::vector<cl::Platform>::iterator plat = platforms.begin(); plat != platforms.end(); plat++) {
+                std::string s;
+                plat->getInfo(CL_PLATFORM_NAME, &s);
+                std::cout << "Platform: " << s << std::endl;
 
-    // Investigate each platform
-    std::cout << "\n-------------------------" << std::endl;
-    for (std::vector<cl::Platform>::iterator plat = platforms.begin();
-         plat != platforms.end(); plat++) {
-      std::string s;
-      plat->getInfo(CL_PLATFORM_NAME, &s);
-      std::cout << "Platform: " << s << std::endl;
+                plat->getInfo(CL_PLATFORM_VENDOR, &s);
+                std::cout << "\tVendor:  " << s << std::endl;
 
-      plat->getInfo(CL_PLATFORM_VENDOR, &s);
-      std::cout << "\tVendor:  " << s << std::endl;
+                plat->getInfo(CL_PLATFORM_VERSION, &s);
+                std::cout << "\tVersion: " << s << std::endl;
 
-      plat->getInfo(CL_PLATFORM_VERSION, &s);
-      std::cout << "\tVersion: " << s << std::endl;
+                // Discover number of devices
+                std::vector<cl::Device> devices;
+                plat->getDevices(CL_DEVICE_TYPE_ALL, &devices);
+                std::cout << "\n\tNumber of devices: " << devices.size() << std::endl;
 
-      // Discover number of devices
-      std::vector<cl::Device> devices;
-      plat->getDevices(CL_DEVICE_TYPE_ALL, &devices);
-      std::cout << "\n\tNumber of devices: " << devices.size() << std::endl;
+                if (!device) {
+                    device = devices.front();
+                }
 
-      if (!device) {
-        device = devices.front();
-      }
+                // Investigate each device
+                for (std::vector<cl::Device>::iterator dev = devices.begin(); dev != devices.end(); dev++) {
+                    std::cout << "\t-------------------------" << std::endl;
 
-      // Investigate each device
-      for (std::vector<cl::Device>::iterator dev = devices.begin();
-           dev != devices.end(); dev++) {
-        std::cout << "\t-------------------------" << std::endl;
+                    dev->getInfo(CL_DEVICE_NAME, &s);
+                    std::cout << "\t\tName: " << s << std::endl;
 
-        dev->getInfo(CL_DEVICE_NAME, &s);
-        std::cout << "\t\tName: " << s << std::endl;
+                    dev->getInfo(CL_DEVICE_OPENCL_C_VERSION, &s);
+                    std::cout << "\t\tVersion: " << s << std::endl;
 
-        dev->getInfo(CL_DEVICE_OPENCL_C_VERSION, &s);
-        std::cout << "\t\tVersion: " << s << std::endl;
+                    int i;
+                    dev->getInfo(CL_DEVICE_MAX_COMPUTE_UNITS, &i);
+                    std::cout << "\t\tMax. Compute Units: " << i << std::endl;
 
-        int i;
-        dev->getInfo(CL_DEVICE_MAX_COMPUTE_UNITS, &i);
-        std::cout << "\t\tMax. Compute Units: " << i << std::endl;
+                    size_t size;
+                    dev->getInfo(CL_DEVICE_LOCAL_MEM_SIZE, &size);
+                    std::cout << "\t\tLocal Memory Size: " << size / 1024 << " KB" << std::endl;
 
-        size_t size;
-        dev->getInfo(CL_DEVICE_LOCAL_MEM_SIZE, &size);
-        std::cout << "\t\tLocal Memory Size: " << size / 1024 << " KB"
-                  << std::endl;
+                    dev->getInfo(CL_DEVICE_GLOBAL_MEM_SIZE, &size);
+                    std::cout << "\t\tGlobal Memory Size: " << size / (1024 * 1024) << " MB" << std::endl;
 
-        dev->getInfo(CL_DEVICE_GLOBAL_MEM_SIZE, &size);
-        std::cout << "\t\tGlobal Memory Size: " << size / (1024 * 1024) << " MB"
-                  << std::endl;
+                    dev->getInfo(CL_DEVICE_MAX_MEM_ALLOC_SIZE, &size);
+                    std::cout << "\t\tMax Alloc Size: " << size / (1024 * 1024) << " MB" << std::endl;
 
-        dev->getInfo(CL_DEVICE_MAX_MEM_ALLOC_SIZE, &size);
-        std::cout << "\t\tMax Alloc Size: " << size / (1024 * 1024) << " MB"
-                  << std::endl;
+                    dev->getInfo(CL_DEVICE_MAX_WORK_GROUP_SIZE, &size);
+                    std::cout << "\t\tMax Work-group Total Size: " << size << std::endl;
 
-        dev->getInfo(CL_DEVICE_MAX_WORK_GROUP_SIZE, &size);
-        std::cout << "\t\tMax Work-group Total Size: " << size << std::endl;
+                    std::vector<size_t> d;
+                    dev->getInfo(CL_DEVICE_MAX_WORK_ITEM_SIZES, &d);
+                    std::cout << "\t\tMax Work-group Dims: (";
+                    for (std::vector<size_t>::iterator st = d.begin(); st != d.end(); st++) std::cout << *st << " ";
+                    std::cout << "\x08)" << std::endl;
 
-        std::vector<size_t> d;
-        dev->getInfo(CL_DEVICE_MAX_WORK_ITEM_SIZES, &d);
-        std::cout << "\t\tMax Work-group Dims: (";
-        for (std::vector<size_t>::iterator st = d.begin(); st != d.end(); st++)
-          std::cout << *st << " ";
-        std::cout << "\x08)" << std::endl;
+                    std::cout << "\t-------------------------" << std::endl;
+                }
 
-        std::cout << "\t-------------------------" << std::endl;
-      }
+                std::cout << "\n-------------------------\n";
+            }
+        }
+        catch (cl::Error err) {
+            std::cout << "OpenCL Error: " << err.what() << std::endl;
+            std::cout << "Check cl.h for error codes." << std::endl;
+            exit(-1);
+        }
 
-      std::cout << "\n-------------------------\n";
+        if (!device) {
+            throw std::runtime_error("No OpenCL device found.");
+        }
+
+        return device.value();
     }
-  } catch (cl::Error err) {
-    std::cout << "OpenCL Error: " << err.what() << std::endl;
-    std::cout << "Check cl.h for error codes." << std::endl;
-    exit(-1);
-  }
 
-  if (!device) {
-    throw std::runtime_error("No OpenCL device found.");
-  }
+    cl::Program CreateProgram(cl::Context& context, cl::CommandQueue& queue, cl::Device& device, const char* path)
+    {
+        std::ifstream kernelFile(path);
+        if (!kernelFile.is_open()) {
+            throw std::runtime_error("Cannot open kernel file: " + std::string(path));
+        }
+        std::stringstream kernelStream;
+        kernelStream << kernelFile.rdbuf();
+        std::string kernelSource = kernelStream.str();
 
-  return device.value();
-}
+        cl::Program program = cl::Program(context, kernelSource.c_str());
+        program.build({device});
 
-cl::Program CreateProgram(cl::Context &context, cl::CommandQueue &queue,
-                          cl::Device &device, const char *path) {
-  std::ifstream kernelFile(path);
-  if (!kernelFile.is_open()) {
-    throw std::runtime_error("Cannot open kernel file: " + std::string(path));
-  }
-  std::stringstream kernelStream;
-  kernelStream << kernelFile.rdbuf();
-  std::string kernelSource = kernelStream.str();
+        return program;
+    }
 
-  cl::Program program = cl::Program(context, kernelSource.c_str());
-  program.build({device});
+    void RunVADDKernel(cl::Context& context, cl::CommandQueue& queue, cl::Device& device)
+    {
+        constexpr auto LENGTH = 1024;
 
-  return program;
-}
+        auto program = CreateProgram(context, queue, device, VADD_KERNEL_PATH);
 
-void RunVADDKernel(cl::Context &context, cl::CommandQueue &queue,
-                   cl::Device &device) {
-  constexpr auto LENGTH = 1024;
+        auto vadd = cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, int>(program, "vadd");
 
-  auto program = CreateProgram(context, queue, device, VADD_KERNEL_PATH);
+        std::vector<float> h_a(LENGTH);
+        std::vector<float> h_b(LENGTH);
+        std::vector<float> h_c(LENGTH);
+        std::vector<float> h_d(LENGTH, 0xdeadbeef);
 
-  auto vadd =
-      cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, int>(
-          program, "vadd");
+        // File the h_a & h_b randomly
+        for (int i = 0; i < LENGTH; i++) {
+            h_a[i] = rand() / (float)RAND_MAX;
+            h_b[i] = rand() / (float)RAND_MAX;
+            h_c[i] = rand() / (float)RAND_MAX;
+        }
 
-  std::vector<float> h_a(LENGTH);
-  std::vector<float> h_b(LENGTH);
-  std::vector<float> h_c(LENGTH);
-  std::vector<float> h_d(LENGTH, 0xdeadbeef);
+        cl::Buffer d_a = cl::Buffer(context, h_a.begin(), h_a.end(), true);
 
-  // File the h_a & h_b randomly
-  for (int i = 0; i < LENGTH; i++) {
-    h_a[i] = rand() / (float)RAND_MAX;
-    h_b[i] = rand() / (float)RAND_MAX;
-    h_c[i] = rand() / (float)RAND_MAX;
-  }
+        cl::Buffer d_b = cl::Buffer(context, h_b.begin(), h_b.end(), true);
 
-  cl::Buffer d_a = cl::Buffer(context, h_a.begin(), h_a.end(), true);
+        cl::Buffer d_c = cl::Buffer(context, h_c.begin(), h_c.end(), true);
 
-  cl::Buffer d_b = cl::Buffer(context, h_b.begin(), h_b.end(), true);
+        cl::Buffer d_d = cl::Buffer(context, CL_MEM_WRITE_ONLY, sizeof(float) * LENGTH);
 
-  cl::Buffer d_c = cl::Buffer(context, h_c.begin(), h_c.end(), true);
+        auto start = std::chrono::high_resolution_clock::now();
 
-  cl::Buffer d_d =
-      cl::Buffer(context, CL_MEM_WRITE_ONLY, sizeof(float) * LENGTH);
+        vadd(cl::EnqueueArgs(queue, cl::NDRange(512, 1, 1), cl::NDRange(64, 1, 1)), d_a, d_b, d_c, d_d, LENGTH);
 
-  auto start = std::chrono::high_resolution_clock::now();
+        queue.finish();
+        auto end = std::chrono::high_resolution_clock::now();
 
-  vadd(cl::EnqueueArgs(queue, cl::NDRange(512, 1, 1), cl::NDRange(64, 1, 1)),
-       d_a, d_b, d_c, d_d, LENGTH);
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
 
-  queue.finish();
-  auto end = std::chrono::high_resolution_clock::now();
+        std::cout << "Kernel execution time: " << duration.count() << " ms" << std::endl;
 
-  auto duration =
-      std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        cl::copy(queue, d_d, h_d.begin(), h_d.end());
 
-  std::cout << "Kernel execution time: " << duration.count() << " ms"
-            << std::endl;
+        // Test results
+        unsigned int correct = 0;
+        for (int i = 0; i < LENGTH; i++) {
+            float tmp = h_a[i] + h_b[i] + h_c[i] - h_d[i];
+            if (tmp * tmp < TOL * TOL)
+                correct++;
+        }
 
-  cl::copy(queue, d_d, h_d.begin(), h_d.end());
-
-  // Test results
-  unsigned int correct = 0;
-  for (int i = 0; i < LENGTH; i++) {
-    float tmp = h_a[i] + h_b[i] + h_c[i] - h_d[i];
-    if (tmp * tmp < TOL * TOL)
-      correct++;
-  }
-
-  printf("C = A+B:  %d out of %d results were correct.\n", correct, LENGTH);
-}
+        printf("C = A+B:  %d out of %d results were correct.\n", correct, LENGTH);
+    }
 } // namespace
 
-void RunMatmulKernel(cl::Context &context, cl::CommandQueue &queue,
-                     cl::Device &device) {
-  std::cout << MATMUL_KERNEL_PATH << std::endl;
-  auto program = CreateProgram(context, queue, device, MATMUL_KERNEL_PATH);
+void RunMatmulKernel(cl::Context& context, cl::CommandQueue& queue, cl::Device& device)
+{
+    std::cout << MATMUL_KERNEL_PATH << std::endl;
+    auto program = CreateProgram(context, queue, device, MATMUL_KERNEL_PATH);
 
-  auto matmul =
-      cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, int, int, int, int>(
-          program, "matmul");
+    auto matmul = cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, int, int, int, int>(program, "matmul");
 
-  std::vector<float> h_a{1.0f, 2.0f, 3.0f, 4.0f};
-  std::vector<float> h_b{5.0f, 6.0f, 7.0f, 8.0f};
-  std::vector<float> h_c(4);
+    std::vector<float> h_a{1.0f, 2.0f, 3.0f, 4.0f};
+    std::vector<float> h_b{5.0f, 6.0f, 7.0f, 8.0f};
+    std::vector<float> h_c(4);
 
-  std::vector<float> result(4);
-  HostKernels::matmul(h_a.data(), h_b.data(), result.data(), 2, 2, 2, 2);
+    std::vector<float> result(4);
+    HostKernels::matmul(h_a.data(), h_b.data(), result.data(), 2, 2, 2, 2);
 
-  cl::Buffer d_a = cl::Buffer(context, h_a.begin(), h_a.end(), true);
+    cl::Buffer d_a = cl::Buffer(context, h_a.begin(), h_a.end(), true);
 
-  cl::Buffer d_b = cl::Buffer(context, h_b.begin(), h_b.end(), true);
+    cl::Buffer d_b = cl::Buffer(context, h_b.begin(), h_b.end(), true);
 
-  cl::Buffer d_c = cl::Buffer(context, CL_MEM_WRITE_ONLY, sizeof(float) * 4);
+    cl::Buffer d_c = cl::Buffer(context, CL_MEM_WRITE_ONLY, sizeof(float) * 4);
 
-  auto start = std::chrono::high_resolution_clock::now();
+    auto start = std::chrono::high_resolution_clock::now();
 
-  matmul(cl::EnqueueArgs(queue, cl::NDRange(4, 1, 1), cl::NDRange(2, 1, 1)), d_a, d_b, d_c, 2, 2, 2,
-         2);
+    matmul(cl::EnqueueArgs(queue, cl::NDRange(4, 1, 1), cl::NDRange(2, 1, 1)), d_a, d_b, d_c, 2, 2, 2, 2);
 
-  queue.finish();
-  auto end = std::chrono::high_resolution_clock::now();
+    queue.finish();
+    auto end = std::chrono::high_resolution_clock::now();
 
-  auto duration =
-      std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
 
-  std::cout << "Kernel execution time: " << duration.count() << " ms"
-            << std::endl;
+    std::cout << "Kernel execution time: " << duration.count() << " ms" << std::endl;
 
-  cl::copy(queue, d_c, h_c.begin(), h_c.end());
+    cl::copy(queue, d_c, h_c.begin(), h_c.end());
 
-  // Test results
-  unsigned int correct = 0;
-  for (int i = 0; i < 2; i++) {
-    for (int j = 0; j < 2; j++) {
-      if (result[i * 2 + j] == h_c[i * 2 + j]) {
-        correct++;
-      }
+    // Test results
+    unsigned int correct = 0;
+    for (int i = 0; i < 2; i++) {
+        for (int j = 0; j < 2; j++) {
+            if (result[i * 2 + j] == h_c[i * 2 + j]) {
+                correct++;
+            }
+        }
     }
-  }
 
-  printf("Matmul:  %d out of %d results were correct.\n", correct, 4);
+    printf("Matmul:  %d out of %d results were correct.\n", correct, 4);
 }
 
-void RunReduceKernel(cl::Context &context, cl::CommandQueue &queue,
-                     cl::Device &device) {
-  std::cout << REDUCE_KERNEL_PATH << std::endl;
-  auto program = CreateProgram(context, queue, device, REDUCE_KERNEL_PATH);
+void RunReduceKernel(cl::Context& context, cl::CommandQueue& queue, cl::Device& device)
+{
+    std::cout << REDUCE_KERNEL_PATH << std::endl;
+    auto program = CreateProgram(context, queue, device, REDUCE_KERNEL_PATH);
 
-  auto reduce =
-      cl::make_kernel<cl::Buffer, cl::Buffer, int>(
-          program, "reduce");
+    auto reduce = cl::make_kernel<cl::Buffer, cl::Buffer, int>(program, "reduce");
 
-  std::vector<int> h_a{1, 2, 3, 4, 5, 6, 7, 8};
-  int h_b = 0;
+    std::vector<int> h_a{1, 2, 3, 4, 5, 6, 7, 8};
+    int              h_b = 0;
 
-  cl::Buffer d_a = cl::Buffer(context, h_a.begin(), h_a.end(), true);
-  
-  cl::Buffer d_b = cl::Buffer(context, CL_MEM_WRITE_ONLY, sizeof(int));
+    cl::Buffer d_a = cl::Buffer(context, h_a.begin(), h_a.end(), true);
 
-  auto start = std::chrono::high_resolution_clock::now();
+    cl::Buffer d_b = cl::Buffer(context, CL_MEM_WRITE_ONLY, sizeof(int));
 
-  reduce(cl::EnqueueArgs(queue, cl::NDRange(256), cl::NDRange(256)), d_a, d_b, (int)h_a.size());
+    auto start = std::chrono::high_resolution_clock::now();
 
-  queue.finish();
-  auto end = std::chrono::high_resolution_clock::now();
+    reduce(cl::EnqueueArgs(queue, cl::NDRange(256), cl::NDRange(256)), d_a, d_b, (int)h_a.size());
 
-  auto duration =
-      std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    queue.finish();
+    auto end = std::chrono::high_resolution_clock::now();
 
-  std::cout << "Kernel execution time: " << duration.count() << " ms"
-            << std::endl;
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
 
-  cl::copy(queue, d_b, &h_b, &h_b + 1);
+    std::cout << "Kernel execution time: " << duration.count() << " ms" << std::endl;
 
-  auto expected = std::accumulate(h_a.begin(), h_a.end(), 0); 
-  if (expected != h_b) {
-    std::cout << "Reduce: Incorrect result. Expected " << expected
-              << " but got " << h_b << std::endl;
-  } else {
-    std::cout << "Reduce: Correct result." << std::endl;
-  }
+    cl::copy(queue, d_b, &h_b, &h_b + 1);
+
+    auto expected = std::accumulate(h_a.begin(), h_a.end(), 0);
+    if (expected != h_b) {
+        std::cout << "Reduce: Incorrect result. Expected " << expected << " but got " << h_b << std::endl;
+    } else {
+        std::cout << "Reduce: Correct result." << std::endl;
+    }
 }
 
-int main() {
-  cl::Device device = GetDevice();
-  cl::Context context = cl::Context(device);
-  cl::CommandQueue queue = cl::CommandQueue(context, device);
+void RunParallelMergeKernel(cl::Context& context, cl::CommandQueue& queue, cl::Device& device)
+{
+    std::cout << PARALLEL_MERGE_KERNEL_PATH << std::endl;
+    auto program = CreateProgram(context, queue, device, PARALLEL_MERGE_KERNEL_PATH);
 
-  // RunVADDKernel(context, queue, device);
-  // RunMatmulKernel(context, queue, device);
-  RunReduceKernel(context, queue, device);
-  return 0;
+    auto parallel_merge = cl::make_kernel<cl::Buffer, int, cl::Buffer, int, cl::Buffer>(program, "parallel_merge");
+
+    std::mt19937                          generator{std::random_device{}()};
+    std::uniform_real_distribution<float> distribution(0.0f, 1234789.0f);
+
+    int                M = 25000;
+    std::vector<float> h_a(M);
+    for (int i = 0; i < M; ++i) {
+        h_a[i] = distribution(generator);
+    }
+
+    std::sort(h_a.begin(), h_a.end());
+
+    int                N = 25000;
+    std::vector<float> h_b(N);
+    for (int i = 0; i < N; ++i) {
+        h_b[i] = distribution(generator);
+    }
+
+    std::sort(h_b.begin(), h_b.end());
+
+    cl::Buffer d_a = cl::Buffer(context, h_a.begin(), h_a.end(), true);
+
+    cl::Buffer d_b = cl::Buffer(context, h_b.begin(), h_b.end(), true);
+
+    cl::Buffer d_c = cl::Buffer(context, CL_MEM_WRITE_ONLY, sizeof(float) * (M + N));
+
+    auto start = std::chrono::high_resolution_clock::now();
+
+    constexpr auto WORKGROUP_SIZE                           = 256;
+    constexpr auto NUMBER_OF_ELEMENTS_PROCESSED_BY_ONE_LANE = 8;
+    auto           num_thread_needed                        = (M + N + NUMBER_OF_ELEMENTS_PROCESSED_BY_ONE_LANE - 1) / NUMBER_OF_ELEMENTS_PROCESSED_BY_ONE_LANE;
+    auto           num_workgroups                           = (num_thread_needed + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+    parallel_merge(cl::EnqueueArgs(queue, cl::NDRange(num_workgroups * WORKGROUP_SIZE), cl::NDRange(WORKGROUP_SIZE)), d_a, M, d_b, N, d_c);
+
+    queue.finish();
+    auto end = std::chrono::high_resolution_clock::now();
+
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+
+    std::cout << "Kernel execution time: " << duration.count() << " ms" << std::endl;
+
+    std::vector<float> h_c(M + N);
+    cl::copy(queue, d_c, h_c.begin(), h_c.end());
+
+    std::vector<float> expected(M + N);
+    std::merge(h_a.begin(), h_a.end(), h_b.begin(), h_b.end(), expected.begin());
+
+    bool isCorrect = true;
+    for (int i = 0; i < M + N; i++) {
+        if (abs(h_c[i] - expected[i]) > TOL) {
+            std::cout << "Mismatch at index " << i << ": expected " << expected[i] << ", got " << h_c[i] << std::endl;
+            isCorrect = false;
+            break;
+        }
+    }
+    if (isCorrect) {
+        std::cout << "Parallel Merge: Correct result." << std::endl;
+    } else {
+        std::cout << "Parallel Merge: Incorrect result." << std::endl;
+    }
+}
+
+int main()
+{
+    cl::Device       device  = GetDevice();
+    cl::Context      context = cl::Context(device);
+    cl::CommandQueue queue   = cl::CommandQueue(context, device);
+
+    // RunVADDKernel(context, queue, device);
+    // RunMatmulKernel(context, queue, device);
+    // RunReduceKernel(context, queue, device);
+    RunParallelMergeKernel(context, queue, device);
+    return 0;
 }

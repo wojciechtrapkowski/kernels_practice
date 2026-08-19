@@ -1,1 +1,1 @@
-@"C:\workspace\drivers.gpu.compiler.raytracing-library\tools\cmake\bin\cmake.exe" %*
+@"D:\drivers.gpu.compiler.raytracing-library\tools\cmake\bin\cmake.exe" %*
