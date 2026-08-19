@@ -26,6 +26,8 @@ int find_intersection_on_antydiagonal(__global float* A, int M, __global float* 
             begin = mid + 1;
         } else {
             // we can't take this from A, because b is smaller, so we need to move left on the anty diagonal.
+            // if we would move to the right, we would take a value from A that is bigger than the current value from B, so we would take even smaller number
+            // from B (remember arrays are sorted). this would be illegal state.
             end = mid;
         }
     }
