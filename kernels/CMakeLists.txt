@@ -6,7 +6,7 @@ target_include_directories(Kernels INTERFACE
     "${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
-file(GLOB KERNEL_FILES "${CMAKE_CURRENT_SOURCE_DIR}/device/*.cl")
+file(GLOB KERNEL_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/device/*.cl" )
 
 add_custom_target(copy_kernels ALL)
 

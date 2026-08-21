@@ -31,6 +31,10 @@
 #error "PARALLEL_MERGE_KERNEL_PATH not defined"
 #endif
 
+#ifndef PREFIX_SUM_KERNEL_PATH
+#error "PREFIX_SUM_KERNEL_PATH not defined"
+#endif
+
 #include "host/matmul.hpp"
 
 namespace
@@ -132,7 +136,16 @@ namespace
         std::string kernelSource = kernelStream.str();
 
         cl::Program program = cl::Program(context, kernelSource.c_str());
-        program.build({device});
+        try {
+            program.build({device}, "-cl-std=CL2.0");
+        }
+        catch (const cl::Error& error) {
+            std::cerr << "OpenCL build failed: " << error.what() << " (" << error.err() << ")\n";
+
+            std::cerr << program.getBuildInfo<CL_PROGRAM_BUILD_LOG>(device) << '\n';
+
+            throw;
+        }
 
         return program;
     }
@@ -339,6 +352,77 @@ void RunParallelMergeKernel(cl::Context& context, cl::CommandQueue& queue, cl::D
     }
 }
 
+void RunPrefixSumKernel(cl::Context& context, cl::CommandQueue& queue, cl::Device& device)
+{
+    constexpr auto WORKGROUP_SIZE = 256;
+
+    auto program = CreateProgram(context, queue, device, PREFIX_SUM_KERNEL_PATH);
+
+    auto prefix_sum          = cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, int>(program, "calculate_prefix_sum");
+    auto finalize_prefix_sum = cl::make_kernel<cl::Buffer, cl::Buffer, int>(program, "finalize_prefix_sum");
+
+    std::mt19937                       generator{std::random_device{}()};
+    std::uniform_int_distribution<int> distribution(0, 1234789);
+
+    int              N = 25000;
+    std::vector<int> h_input(N);
+    for (int i = 0; i < N; ++i) {
+        h_input[i] = distribution(generator);
+    }
+
+    cl::Buffer d_input = cl::Buffer(context, h_input.begin(), h_input.end(), true);
+
+    cl::Buffer d_output = cl::Buffer(context, CL_MEM_WRITE_ONLY, sizeof(int) * N);
+
+    auto start = std::chrono::high_resolution_clock::now();
+
+    auto solveRecursively = [&](this const auto& self, cl::Buffer& d_input, int N, cl::Buffer& d_output) -> void {
+        auto num_workgroups = (N + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+
+        if (num_workgroups == 1) {
+            prefix_sum(cl::EnqueueArgs(queue, cl::NDRange(WORKGROUP_SIZE), cl::NDRange(WORKGROUP_SIZE)), d_input, d_output, cl::Buffer{}, N);
+            return;
+        }
+
+        cl::Buffer d_workgroupData = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(int) * num_workgroups);
+        prefix_sum(cl::EnqueueArgs(queue, cl::NDRange(num_workgroups * WORKGROUP_SIZE), cl::NDRange(WORKGROUP_SIZE)), d_input, d_output, d_workgroupData, N);
+
+        self(d_workgroupData, num_workgroups, d_workgroupData);
+
+        finalize_prefix_sum(cl::EnqueueArgs(queue, cl::NDRange(num_workgroups * WORKGROUP_SIZE), cl::NDRange(WORKGROUP_SIZE)), d_output, d_workgroupData, N);
+    };
+
+    solveRecursively(d_input, N, d_output);
+
+    auto end = std::chrono::high_resolution_clock::now();
+
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+
+    std::cout << "Kernel execution time: " << duration.count() << " ms" << std::endl;
+
+    std::vector<int> h_output(N);
+    cl::copy(queue, d_output, h_output.begin(), h_output.end());
+
+    std::vector<int> expected(N);
+    for (int i = 0; i < N; ++i) {
+        expected[i] = std::accumulate(h_input.begin(), h_input.begin() + i, 0);
+    }
+
+    bool isCorrect = true;
+    for (int i = 0; i < N; i++) {
+        if (h_output[i] != expected[i]) {
+            std::cout << "Mismatch at index " << i << ": expected " << expected[i] << ", got " << h_output[i] << std::endl;
+            isCorrect = false;
+            break;
+        }
+    }
+    if (isCorrect) {
+        std::cout << "Prefix Sum: Correct result." << std::endl;
+    } else {
+        std::cout << "Prefix Sum: Incorrect result." << std::endl;
+    }
+}
+
 int main()
 {
     cl::Device       device  = GetDevice();
@@ -348,6 +432,7 @@ int main()
     // RunVADDKernel(context, queue, device);
     // RunMatmulKernel(context, queue, device);
     // RunReduceKernel(context, queue, device);
-    RunParallelMergeKernel(context, queue, device);
+    // RunParallelMergeKernel(context, queue, device);
+    RunPrefixSumKernel(context, queue, device);
     return 0;
 }
